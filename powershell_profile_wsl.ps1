@@ -40,6 +40,7 @@ function Invoke-WSLCommand {
        throw "No command given. Leaving."
     }
 
+    Write-Verbose "Execute command: $Command"
     $_wslProcess=(Start-Process -FilePath "wsl.exe" -ArgumentList "--distribution $Distribution --user $User -- $Command" -Wait -NoNewWindow -PassThru)
 
     if($_wslProcess.ExitCode -ne 0) {
@@ -85,7 +86,7 @@ function Copy-WSLFolderToTarget {
 
     Write-Verbose "Convert local path to WSL path"
     $_wslSourcePath = Convert-WSLPath -LocalPath "$LocalPath"
-    Invoke-WSLCommand -Distribution $Distribution -Command "cp -r ""$_wslSourcePath"" ""$TargetPath""" -User $User
+    Invoke-WSLCommand -Distribution $Distribution -Command "cp -r ""$_wslSourcePath""/* ""$TargetPath""" -User $User
 }
 
 function Copy-WSLFileToTarget {
@@ -102,7 +103,8 @@ function Copy-WSLFileToTarget {
 
     Write-Verbose "Convert local path to WSL path"
     $_wslSourcePath = Convert-WSLPath -LocalPath "$LocalPath"
-    Invoke-WSLCommand -Distribution $Distribution -Command "cp ""$_wslSourcePath"" ""$TargetPath""" -User $User
+    Invoke-WSLCommand -Distribution $Distribution -Command "cp ""$_wslSourcePath"" ""$TargetPath"" -r" -User $User
+
 }
 
 function Test-WSLLocalAdmin {
@@ -267,7 +269,7 @@ function Initialize-Wsl {
     # Control variables and prerequisites
     ##################################################################################
     $_wslImageExist = $False
-    if(((wsl.exe -l).Replace("`0","")) -like "$WslName") {$_wslImageExist=$true}
+    if(((wsl.exe -l).Replace("`0","")) -like "${WslName}*") {$_wslImageExist=$true}
 
 
     # Check admin permissions. Will fail if process runs "as admin"
@@ -399,7 +401,11 @@ function Initialize-WSLAnsible {
         [Parameter(Position=7, mandatory=$false)]
         [string]$InitialPlaybook="./playbooks/Baseline.yaml",
         [Parameter(Position=8, mandatory=$false)]
-        [string]$LocalAnsiblePath=""
+        [string]$AnsiblePlaybook="./playbooks/single-app-plays/Ansible-WSL.yaml",
+        [Parameter(Position=9, mandatory=$false)]
+        [string]$LocalAnsiblePath="",
+        [Parameter(Position=10, mandatory=$false)]
+        [string]$KeySourcePath=""
     )
 
     $_sw = [Diagnostics.Stopwatch]::StartNew()
@@ -407,11 +413,14 @@ function Initialize-WSLAnsible {
     # Set default value, because didn't found out, how to set document in params section
     if([string]::IsNullOrEmpty($LocalAnsiblePath)) { $LocalAnsiblePath="{0}\Ansible" -f [Environment]::GetFolderPath("MyDocuments") }
 
+    # Set default value, because didn't found out, how to set document in params section
+    if([string]::IsNullOrEmpty($KeySourcePath)) { $KeySourcePath="{0}\.ssh\ansible" -f [Environment]::GetFolderPath("USERPROFILE") }
+
     Write-Output "Check for an existing ansible installation with name ""$WslName""" 
     $_testAnsConfig=0
-    if(((wsl.exe -l).Replace("`0","")) -like "${WslName}") {
+    if(((wsl.exe -l).Replace("`0","")) -like "${WslName}*") {
         Write-Output "...exist. Get ansible information from maschine" 
-        $_testAnsConfig = Invoke-WSLCommand -Distribution $WslName -Command "if [ -f /home/work/ansible_wsl.cfg ]; then echo 1; else echo 0; fi" -User root
+        $_testAnsConfig = Invoke-WSLCommand -Distribution $WslName -Command "if [ -f /home/$WslWorkUser/ansible_wsl.cfg ]; then echo 1; else echo 0; fi" -User root
     }
 
     if($_testAnsConfig -eq 0 -or $WslReset -eq $true -or $WslUpdate -eq $true) {
@@ -441,6 +450,18 @@ function Initialize-WSLAnsible {
         Invoke-WSLCommand -Distribution $WslName -Command "sudo chmod 600 /home/$WslWorkUser/av.secret" -User root
     } else  { Write-Output "av.secret file not found. Please add it and run the script again or create it in ""/home/$WslWorkUser/av.secret""" }
     
+    Write-Output "Check if ""Keys-Path"" exists in $KeySourcePath"
+    if(Test-Path $KeySourcePath) {
+        Write-Output "Copy secret files"
+        Invoke-WSLCommand -Distribution $WslName -Command "mkdir /home/$WslWorkUser/.ssh" -User root
+        Invoke-WSLCommand -Distribution $WslName -Command "chown ${WslWorkUser}:${WslWorkUser} /home/$WslWorkUser/.ssh" -User root
+        Invoke-WSLCommand -Distribution $WslName -Command "chmod 700 /home/$WslWorkUser/.ssh" -User root
+        Copy-WSLFolderToTarget -Distribution $WslName -LocalPath "$KeySourcePath" -TargetPath "/home/$WslWorkUser/.ssh/" -User root -Recurse
+        Invoke-WSLCommand -Distribution $WslName -Command "sudo chown $($WslWorkUser):$($WslWorkUser) /home/$WslWorkUser/.ssh/*" -User root
+        Invoke-WSLCommand -Distribution $WslName -Command "sudo chmod 600 /home/$WslWorkUser/.ssh/*" -User root
+    } else  { Write-Output "Key source path not found" }
+    
+
     Write-Output "Write ansible configuration file"
     $_ansibleDir="{0}" -f $(Convert-WSLPath -LocalPath $LocalAnsiblePath)
     Invoke-WSLCommand -Distribution $WslName -Command "echo ""[defaults]"" > /home/$WslWorkUser/ansible_wsl.cfg" -User root
@@ -452,10 +473,20 @@ function Initialize-WSLAnsible {
     Invoke-WSLCommand -Distribution $WslName -Command "echo ""ansible_python_interpreter = auto_silent"" >> /home/$WslWorkUser/ansible_wsl.cfg" -User root
     Invoke-WSLCommand -Distribution $WslName -Command "echo ""timeout = 30"" >> /home/$WslWorkUser/ansible_wsl.cfg" -User root
     Invoke-WSLCommand -Distribution $WslName -Command "echo ""vault_password_file=/home/$WslWorkUser/av.secret"" >> /home/$WslWorkUser/ansible_wsl.cfg" -User root
+    Invoke-WSLCommand -Distribution $WslName -Command "echo ""collections_paths=/usr/local/share/ansible"" >> /home/$WslWorkUser/ansible_wsl.cfg" -User root
 
     if(Test-Path $LocalAnsiblePath\av.secret) {
-        Write-Output "Run Baseline playbook from $_ansibleDir"
+        
+        if(-Not ([string]::IsNullOrEmpty($InitialPlaybook))) {
+            Write-Output "Run Baseline playbook from $_ansibleDir"
         Invoke-WSLCommand -Distribution $WslName -Command "export ANSIBLE_CONFIG=/home/$WslWorkUser/ansible_wsl.cfg;cd $_ansibleDir;ansible-playbook --limit wsl $($_ansibleDir)/$($InitialPlaybook)" -User root
+        }
+        
+        if(-Not ([string]::IsNullOrEmpty($AnsiblePlaybook))) {
+            Write-Output "Run Ansible playbook from $_ansibleDir"
+        Invoke-WSLCommand -Distribution $WslName -Command "export ANSIBLE_CONFIG=/home/$WslWorkUser/ansible_wsl.cfg;cd $_ansibleDir;ansible-playbook --limit wsl $($_ansibleDir)/$($AnsiblePlaybook)" -User root
+        }
+
     } else {
         Write-Output "Do not start playbook, because no secret file given"
     }

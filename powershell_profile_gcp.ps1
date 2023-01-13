@@ -30,6 +30,127 @@ $script:_scriptDir=$PSScriptRoot
 $script:_connectionJob = $null; 
 $script:_localPort = $null;
 
+function Remove-GCPInstance() {
+
+    param (
+        [string]$InstanceName,
+        [string]$InstanceZone,
+        [string]$InstanceProject
+    )
+
+    Write-HalaLog -Message "Check for existing instance ""$InstanceName""" -Target Console -Component "Remove-GCPInstance"
+    if((gcloud compute instances list --format="table(name)" --project $InstanceProject).contains($InstanceName)) { 
+        Write-HalaLog -Message "  Found instance with name ""$InstanceName"". Delete it."  -Target Console -Component "Remove-GCPInstance"
+        Out-Null | gcloud compute instances delete $InstanceName --project $InstanceProject --zone=$InstanceZone --delete-disks=all --quiet | Out-Null
+        $_return=$?
+        if (! $_return) {
+            Write-HalaErrorLog "  Failed to delete instance (Returncode: $_return)" -Target Console -Component "Remove-GCPInstance"
+        } else {
+            Write-HalaLog -Message "  Sucessful deleted instance" -Target Console -Component "Remove-GCPInstance"
+        }
+    } else {
+        Write-HalaLog -Message "Instance not found" -Target Console -Component "Remove-GCPInstance"
+    }
+}
+
+function Add-GCPInstance() {
+    param (
+        [string]$InstanceProject,
+        [string]$InstanceZone,
+        [string]$InstanceName,
+        [string]$InstanceMachineType,
+        [string]$InstanceNetworkIP,
+        [string]$InstanceSubnetworkInterface,
+        [Parameter()]
+        [ValidateSet('ubuntu-2004','sles-12','sles-15','windows-2012','windows-2016','windows-2019')]
+        [string]$InstanceOSImage,
+        [string]$InstanceTags
+    )
+
+    if ($InstanceOSImage -eq "ubuntu-2004") {
+        $_gc_disk_spec="image-family=ubuntu-minimal-2004-lts,image-project=ubuntu-os-cloud"
+        $_gc_disk_size=10
+        $_gc_instance_tags=$InstanceTags
+        $_gc_startup_script_meta_name="startup-script"
+        $_gc_startup_script="startup.sh"
+    } elseif ($InstanceOSImage -eq "sles-12") {
+        $_gc_disk_spec="image-family=sles-12,image-project=suse-cloud"
+        $_gc_disk_size=10
+        $_gc_instance_tags=$InstanceTags
+        $_gc_startup_script_meta_name="startup-script"
+        $_gc_startup_script="startup.sh"
+    } elseif ($InstanceOSImage -eq "sles-15") {
+        $_gc_disk_spec="image-family=sles-15,image-project=suse-cloud"
+        $_gc_disk_size=10
+        $_gc_instance_tags=$InstanceTags
+        $_gc_startup_script_meta_name="startup-script"
+        $_gc_startup_script="startup.sh"
+    } elseif ($InstanceOSImage -eq "windows-2012") {
+        $_gc_disk_spec="image-family=windows-2012-r2,image-project=windows-cloud"
+        $_gc_disk_size=50
+        $_gc_instance_tags=$InstanceTags
+        $_gc_startup_script_meta_name="windows-startup-script-ps1"
+        $_gc_startup_script="startup.ps1"
+    } elseif ($InstanceOSImage -eq "windows-2016") {
+        $_gc_disk_spec="image-family=windows-2016,image-project=windows-cloud"
+        $_gc_disk_size=50
+        $_gc_instance_tags=$InstanceTags
+        $_gc_startup_script_meta_name="windows-startup-script-ps1"
+        $_gc_startup_script="startup.ps1"
+    } elseif ($InstanceOSImage -eq "windows-2019") {
+        $_gc_disk_spec="image-family=windows-2019,image-project=windows-cloud"
+        $_gc_disk_size=50
+        $_gc_instance_tags=$InstanceTags
+        $_gc_startup_script_meta_name="windows-startup-script-ps1"
+        $_gc_startup_script="startup.ps1"
+    } else {
+        Write-HalaErrorLog "Disk image not known or not specified" -Target Console -Component GCPCreate
+    }
+
+
+    Write-HalaLog -Message "Create a new GCP instance" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Project:     ""$InstanceProject""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Zone:        ""$InstanceZone""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Name:        ""$InstanceName""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Type:        ""$InstanceMachineType""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Address:     ""$InstanceNetworkIP""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Subnet:      ""$InstanceSubnetworkInterface""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  OS Image:    ""$InstanceOSImage""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Tags:        ""$_gc_instance_tags""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Disk:        ""$_gc_disk_spec""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Script meta: ""$_gc_startup_script_meta_name""" -Target Console -Component GCPCreate
+    Write-HalaLog -Message "  Script:      ""$_gc_startup_script""" -Target Console -Component GCPCreate
+
+    #,type=projects/mms-cif-vm-poc-test-a/zones/europe-west4-b/diskTypes/pd-balanced" `
+
+    gcloud compute instances create $InstanceName `
+        --project="$($InstanceProject)" `
+        --zone="$($InstanceZone)" `
+        --machine-type="$($InstanceMachineType)" `
+        --network-interface="private-network-ip=$InstanceNetworkIP,subnet=$InstanceSubnetworkInterface,no-address" `
+        --metadata="enable-oslogin=true" `
+        --maintenance-"policy=MIGRATE" `
+        --provisioning-model="STANDARD" `
+        --no-service-account `
+        --no-scopes `
+        --tags="$($_gc_instance_tags)" `
+        --create-disk="auto-delete=yes,boot=yes,device-name=$($InstanceName)-disk0,$($_gc_disk_spec),mode=rw,size=$($_gc_disk_size)" `
+        --resource-policies="cost-saving-pkg" `
+        --no-shielded-secure-boot `
+        --shielded-vtpm `
+        --shielded-integrity-monitoring `
+        --labels="iaasops=yes,stage=dev" `
+        --reservation-affinity="any" `
+        --metadata-from-file="$($_gc_startup_script_meta_name)=$($PSScriptRoot)/$($_gc_startup_script)" `
+        --quiet | Out-Null
+
+    $_return=$?
+    if (! $_return) {
+        Write-HalaErrorLog "  Failed to create instance ""$_gc_instance_name"" (Returncode: $_return)" -Target Console -Component GCPCreate
+    } else {
+        Write-HalaLog -Message "  Instance created successfully " -Target Console -Component GCPCreate
+    }
+}
 function New-IAPConnectionJob() {
 
     [CmdletBinding()]
@@ -105,11 +226,20 @@ function Open-IAPConnection {
         [string]$InstanceLabels
     )
 
-    if (-Not (Get-Command gcloud -ErrorAction SilentlyContinue)) { throw "Gcloud utility must be installed" }
+    if (-Not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
+        
+        # Check manually for gcloud.cmd and extend the path if we found it
+        if (Test-Path "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd") {
+            $env:Path = "$env:Path;{0}" -f "$env:LOCALAPPDATA\Google\Cloud SDK\google-cloud-sdk\bin"
+        } else {
+            throw "gcloud utility must be installed"
+        }
+    }
 
     Write-Output "Set project to ""$InstanceProject"""
     gcloud config set project $InstanceProject --quiet --verbosity none
 
+    Write-Output "Try to install ""$InstanceName"""
     if((gcloud compute instances list --format="table(name)").contains($InstanceName)) { 
         Write-Output "Delete existing instance ""$InstanceName"""
         gcloud compute instances delete $InstanceName --zone=$InstanceZone --delete-disks=all --quiet --verbosity none
@@ -145,7 +275,7 @@ function Open-IAPConnection {
     --zone="$($InstanceZone)" `
     --machine-type="$($InstanceMachineType)" `
     --network-interface="private-network-ip=$($InstanceNetworkIP),subnet=$($InstanceSubnetworkInterface),no-address" `
-    --metadata="enable-oslogin=true" `
+    --metadata="enable-oslogin=true,enable-guest-attributes=true" `
     --maintenance-"policy=MIGRATE" `
     --provisioning-model="STANDARD" `
     --no-service-account `
@@ -158,9 +288,9 @@ function Open-IAPConnection {
     --shielded-integrity-monitoring `
     --labels="$($InstanceLabels)" `
     --reservation-affinity="any" `
-    --metadata-from-file="startup-script=$($_fileName)" `
-    --quiet `
-    --verbosity none
+    --metadata-from-file="startup-script=$($_fileName)" #`
+    #--quiet `
+    #--verbosity none
 
     Remove-Item -Path $_fileName -Force
 

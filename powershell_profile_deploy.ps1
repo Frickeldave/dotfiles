@@ -20,6 +20,7 @@ Copy-Item -Path "$PSScriptRoot/powershell_profile.ps1" -Destination "$MyDocs\Pow
 Copy-Item -Path "$PSScriptRoot/powershell_profile_wsl.ps1" -Destination "$MyDocs\PowerShell\dotfiles\powershell_profile_wsl.ps1" -Force
 Copy-Item -Path "$PSScriptRoot/powershell_profile_ohmyposh.ps1" -Destination "$MyDocs\PowerShell\dotfiles\powershell_profile_ohmyposh.ps1" -Force
 Copy-Item -Path "$PSScriptRoot/powershell_profile_gcp.ps1" -Destination "$MyDocs\PowerShell\dotfiles\powershell_profile_gcp.ps1" -Force
+Copy-Item -Path "$PSScriptRoot/powershell_profile_logging.ps1" -Destination "$MyDocs\PowerShell\dotfiles\powershell_profile_logging.ps1" -Force
 
 if (-Not (Test-Path -Path "$MyDocs\PowerShell\dotfiles\powershell_profile_custom.ps1")) {
     Copy-Item -Path "$PSScriptRoot/powershell_profile_custom.ps1" -Destination "$MyDocs\PowerShell\dotfiles\powershell_profile_custom.ps1" -Force
